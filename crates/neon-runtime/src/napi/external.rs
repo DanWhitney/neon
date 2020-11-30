@@ -1,15 +1,14 @@
 use std::mem::MaybeUninit;
 
 use crate::raw::{Env, Local};
+use crate::napi::bindings as napi;
 
-use nodejs_sys as napi;
-
-/// `finalize_external` is invoked immediately before a `napi_external` is garbage collected
+/// `finalize_external` is invoked immediately before a `External` is garbage collected
 extern "C" fn finalize_external<T: Send + 'static>(
-    env: napi::napi_env,
-    // Raw pointer to a `Box<T>` stored by a `napi_external`
+    env: Env,
+    // Raw pointer to a `Box<T>` stored by a `External`
     data: *mut std::ffi::c_void,
-    // Pointer to a Rust `fn` stored in the `hint` parameter of a `napi_external` called
+    // Pointer to a Rust `fn` stored in the `hint` parameter of a `External` called
     // with the contents of `data` immediately before the value is garbage collected.
     hint: *mut std::ffi::c_void,
 ) {
@@ -21,8 +20,8 @@ extern "C" fn finalize_external<T: Send + 'static>(
     }
 }
 
-/// Returns a pointer to data stored in a `napi_external`
-/// Safety: `deref` must only be called with `napi_external` created by that
+/// Returns a pointer to data stored in a `External`
+/// Safety: `deref` must only be called with `External` created by that
 /// module. Calling `deref` with an external created by another native module,
 /// even another neon module, is undefined behavior.
 /// https://github.com/neon-bindings/neon/issues/591
@@ -31,37 +30,37 @@ pub unsafe fn deref<T: Send + 'static>(
     local: Local,
 ) -> Option<*const T> {
     let mut result = MaybeUninit::uninit();
-    let status = napi::napi_typeof(
+    let status = napi::typeof_value(
         env,
         local,
         result.as_mut_ptr(),
     );
 
-    assert_eq!(status, napi::napi_status::napi_ok);
+    assert_eq!(status, napi::Status::Ok);
 
     let result = result.assume_init();
 
     // Note: This only validates it is an external, not that it was created by
     // this module. In this future, this can be improved with type tagging:
-    // https://nodejs.org/api/n-api.html#n_api_napi_type_tag
+    // https://nodejs.org/api/n-api.html#n_api_type_tag
     // https://github.com/neon-bindings/neon/issues/591
-    if result != napi::napi_valuetype::napi_external {
+    if result != napi::ValueType::External {
         return None;
     }
 
     let mut result = MaybeUninit::uninit();
-    let status = napi::napi_get_value_external(
+    let status = napi::get_value_external(
         env,
         local,
         result.as_mut_ptr(),
     );
 
-    assert_eq!(status, napi::napi_status::napi_ok);
+    assert_eq!(status, napi::Status::Ok);
 
     Some(result.assume_init() as *const _)
 }
 
-/// Creates a `napi_external` from a Rust type
+/// Creates a `External` from a Rust type
 pub unsafe fn create<T: Send + 'static>(
     env: Env,
     v: T,
@@ -70,7 +69,7 @@ pub unsafe fn create<T: Send + 'static>(
     let v = Box::new(v);
     let mut result = MaybeUninit::uninit();
 
-    let status = napi::napi_create_external(
+    let status = napi::create_external(
         env,
         Box::into_raw(v) as *mut _,
         Some(finalize_external::<T>),
@@ -80,9 +79,9 @@ pub unsafe fn create<T: Send + 'static>(
         result.as_mut_ptr(),
     );
 
-    // `napi_create_external` will only fail if the VM is in a throwing state
+    // `create_external` will only fail if the VM is in a throwing state
     // or shutting down.
-    assert_eq!(status, napi::napi_status::napi_ok);
+    assert_eq!(status, napi::Status::Ok);
 
     result.assume_init()
 }
